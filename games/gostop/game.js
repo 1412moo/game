@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = 32; // sw.js 의 VERSION 이하, 이 게임 HTML 의 ?v= 와 같게
+  const APP_VERSION = 33; // sw.js 의 VERSION 이하, 이 게임 HTML 의 ?v= 와 같게
   const SAVE_KEY = 'gostop.save.v1';
   const R = window.GS;
   const C = R.CARDS;
@@ -596,10 +596,12 @@
   }
 
   // 버튼 여러 개 중 하나 고르는 창
+  // closeValue 를 주면 창 바깥(어두운 곳)을 눌러 닫을 수 있고, 그 값으로 끝남
   function ask(opts) {
     return new Promise(res => {
       showModal(Object.assign({}, opts, {
         buttons: opts.buttons.map(b => Object.assign({}, b, { onClick: () => res(b.value) })),
+        onClose: 'closeValue' in opts ? () => res(opts.closeValue) : null,
       }));
       if (opts.onShow) opts.onShow(res);
     });
@@ -645,9 +647,10 @@
         html: '같은 달 3장을 한꺼번에 내서 바닥 패까지 <b>4장</b>을 가져와요.<br>상대 피 1장을 뺏고, 이기면 점수 <b>2배</b>!<div class="show"></div>',
         node: showCards(three), row: true,
         buttons: [{ label: '폭탄!', cls: 'red', value: 'bomb' }, { label: '한 장만', cls: 'light', value: 'one' }],
+        closeValue: 'cancel',
       });
       busy = false;
-      if (seq !== pickSeq || !S) return;
+      if (seq !== pickSeq || !S || v === 'cancel') return; // ✕: 안 내고 다시 고르기
       opt.bomb = v === 'bomb';
     } else if (R.canBomb2(S, id)) {
       busy = true;
@@ -657,9 +660,10 @@
         html: '같은 달 2장을 한꺼번에 내서 바닥 패까지 <b>4장</b>을 가져와요.<br>상대 피 1장을 뺏어요. (점수 2배는 없어요)<div class="show"></div>',
         node: showCards(two), row: true,
         buttons: [{ label: '두 장 폭탄!', cls: 'red', value: 'bomb' }, { label: '한 장만', cls: 'light', value: 'one' }],
+        closeValue: 'cancel',
       });
       busy = false;
-      if (seq !== pickSeq || !S) return;
+      if (seq !== pickSeq || !S || v === 'cancel') return;
       opt.bomb = v === 'bomb';
     } else if (R.canShake(S, id)) {
       busy = true;
@@ -668,9 +672,10 @@
         html: '같은 달 패가 3장 있어요. 흔들면 상대에게 보여 주고,<br>이기면 점수가 <b>2배</b>가 돼요.<div class="show"></div>',
         node: showCards(three), row: true,
         buttons: [{ label: '흔들기', cls: 'red', value: true }, { label: '그냥 내기', cls: 'light', value: false }],
+        closeValue: 'cancel',
       });
       busy = false;
-      if (seq !== pickSeq || !S) return;
+      if (seq !== pickSeq || !S || v === 'cancel') return;
       opt.shake = v;
     }
     if (!opt.bomb) {
@@ -965,9 +970,11 @@
     jjok: ['쪽!', '', 'jjok', 'jjok'], ppeok: ['뻑!', '', 'ppeok', 'ppeok'],
     ttadak: ['따닥!', '', 'ttadak', 'ttadak', 1], sseul: ['싹쓸이!', '', 'sseul', 'sseul', 2],
     ppeokTake: ['뻑 먹기!', '', 'grab', 'grab'], jappeok: ['자뻑!', '', 'grab', 'grab'],
-    firstPpeok: ['첫뻑!', '+7점', 'points', 'points'], yeonPpeok: ['연뻑!', '+14점', 'points', 'points'],
-    samyeonPpeok: ['삼연뻑!', '바로 이겨요', 'points', 'points', 2], firstTtadak: ['첫따닥!', '+7점', 'points', 'points'],
+    firstPpeok: ['첫뻑!', R.PTS.firstPpeok, 'points', 'points'], yeonPpeok: ['연뻑!', R.PTS.yeonPpeok, 'points', 'points'],
+    samyeonPpeok: ['삼연뻑!', '바로 이겨요', 'points', 'points', 2], firstTtadak: ['첫따닥!', R.PTS.firstTtadak, 'points', 'points'],
   };
+  // 보너스 점수(숫자)는 판 끝 정산 때 점당을 곱해 게임머니로 오가므로 게임머니로 보여 줌 (점당 없는 예전 판은 점수)
+  const bonusSub = pts => (S.stake ? `+${W.fmt(pts * S.stake)}` : `+${pts}점`);
   // 쪽·뻑·따닥 등: 패가 바닥에 놓인 채로 알림 (먹는 연출은 그다음)
   async function showEvents(res) {
     const mine = res.player === 0;
@@ -975,7 +982,8 @@
     const evs = res.events.filter(e => EVENT_TEXT[e]);
     if (!evs.length) return;
     for (let i = 0; i < evs.length; i++) {
-      const [t, sub, kind, sound, shake] = EVENT_TEXT[evs[i]];
+      const [t, sub0, kind, sound, shake] = EVENT_TEXT[evs[i]];
+      const sub = typeof sub0 === 'number' ? bonusSub(sub0) : sub0;
       const last = i === evs.length - 1;
       sfx[sound]();
       if (shake) shakeBoard(shake > 1);
@@ -1167,7 +1175,8 @@
   }
 
   // ---------------- 창 / 알림 ----------------
-  function showModal({ emoji, title, html, node, buttons, row }) {
+  let modalClose = null; // 창 바깥을 눌렀을 때 할 일 (없으면 안 닫힘)
+  function showModal({ emoji, title, html, node, buttons, row, onClose }) {
     overlay.querySelector('.modal-emoji').textContent = emoji || '';
     overlay.querySelector('.modal-title').textContent = title;
     const body = overlay.querySelector('.modal-body');
@@ -1186,9 +1195,16 @@
       btn.addEventListener('click', () => { sfx.unlock(); hideModal(); b.onClick(); });
       box.appendChild(btn);
     }
+    modalClose = onClose || null;
     overlay.classList.remove('hidden');
   }
-  const hideModal = () => overlay.classList.add('hidden');
+  const hideModal = () => { modalClose = null; overlay.classList.add('hidden'); };
+  // 창 바깥을 누르면 닫기 (닫아도 되는 창만: 흔들기·폭탄 묻는 창)
+  overlay.addEventListener('click', e => {
+    if (e.target !== overlay || !modalClose) return;
+    const f = modalClose;
+    sfx.unlock(); hideModal(); f();
+  });
 
   let toastTimer = 0;
   function toast(msg) {
